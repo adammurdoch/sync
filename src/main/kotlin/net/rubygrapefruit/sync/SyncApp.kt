@@ -18,57 +18,27 @@ class SyncApp : CliApp("sync") {
         val storeDir = fileSystem.userHomeDirectory.dir(".dir-sync")
         Store.open(storeDir).use { store ->
             val index = store.map<String, FileHash>("details")
-            val stateLock = ReentrantLock()
-            val condition = stateLock.newCondition()
-            var pending = 0
-            val queue = ArrayList<Node>()
-            stateLock.withLock {
-                queue.add(Node(local))
-                pending++
-                condition.signalAll()
-            }
+            val queue = Queue()
+            queue.add(Node(local))
             val executor = Executors.newCachedThreadPool()
-            (1..4).forEach {
+            repeat(4) {
                 executor.submit {
                     while (true) {
-                        val node = stateLock.withLock {
-                            while (queue.isEmpty()) {
-                                if (pending == 0) {
-                                    Logger.info("Worker finished")
-                                    return@submit
-                                }
-                                condition.await()
-                            }
-                            queue.removeFirst()
-                        }
+                        val node = queue.take() ?: break
                         Logger.info("Visit ${node.directory}")
                         for (entry in node.directory.listEntries()) {
                             when (entry.type) {
-                                ElementType.Directory -> stateLock.withLock {
-                                    Logger.info("Push ${entry.path}")
-                                    pending++
-                                    queue.add(Node(entry.toDir()))
-                                    condition.signalAll()
-                                }
+                                ElementType.Directory -> queue.add(Node(entry.toDir()))
 
                                 else -> Logger.info("Ignore ${entry.path}")
                             }
                         }
-                        stateLock.withLock {
-                            pending--
-                            Logger.info("Finish ${node.directory}, pending: $pending")
-                            condition.signalAll()
-                        }
+                        queue.finished(node)
                     }
                 }
             }
 
-            stateLock.withLock {
-                while (pending > 0) {
-                    Logger.info("Pending: $pending")
-                    condition.await()
-                }
-            }
+            queue.await()
 
 //            val result = executor.submit<DirTree> {
 //                visitDir(local, executor)
@@ -91,6 +61,48 @@ class SyncApp : CliApp("sync") {
             }
         }.map { it.get() }
         return DirTree(directory, entries)
+    }
+
+    class Queue {
+        private val stateLock = ReentrantLock()
+        private val condition = stateLock.newCondition()
+        private var pending = 0
+        private val queue = ArrayList<Node>()
+
+        fun add(node: Node) {
+            stateLock.withLock {
+                pending++
+                queue.add(node)
+                condition.signalAll()
+            }
+        }
+
+        fun take(): Node? {
+            return stateLock.withLock {
+                while (queue.isEmpty()) {
+                    if (pending == 0) {
+                        return null
+                    }
+                    condition.await()
+                }
+                queue.removeFirst()
+            }
+        }
+
+        fun finished(node: Node) {
+            stateLock.withLock {
+                pending--
+                condition.signalAll()
+            }
+        }
+
+        fun await() {
+            stateLock.withLock {
+                while (pending > 0) {
+                    condition.await()
+                }
+            }
+        }
     }
 
     class Node(val directory: Directory) {
