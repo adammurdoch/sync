@@ -32,8 +32,9 @@ class SyncApp : CliApp("sync") {
         val entries = directory.listEntries().map { entry ->
             executor.submit<TreeEntry> {
                 when (entry.type) {
-                    ElementType.RegularFile -> RegularFileEntry(entry.name)
                     ElementType.Directory -> visitDir(entry.toDir(), executor)
+                    ElementType.RegularFile -> RegularFileEntry(entry.name)
+                    ElementType.SymLink -> SymlinkEntry(entry.name)
                     else -> throw UnsupportedOperationException("Unsupported type ${entry.type} for $entry")
                 }
             }

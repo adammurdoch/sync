@@ -21,3 +21,8 @@ class RegularFileEntry(override val name: String) : TreeEntry() {
     override val count: Int
         get() = 1
 }
+
+class SymlinkEntry(override val name: String) : TreeEntry() {
+    override val count: Int
+        get() = 1
+}
