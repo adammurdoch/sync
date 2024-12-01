@@ -3,6 +3,6 @@ package net.rubygrapefruit.sync
 import kotlinx.serialization.Serializable
 
 @Serializable
-class ElementDetails(
+class FileHash(
     val checksum: ByteArray
 )
