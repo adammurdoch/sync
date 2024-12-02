@@ -17,9 +17,8 @@ class SyncApp : CliApp("sync") {
         val storeDir = fileSystem.userHomeDirectory.dir(".dir-sync")
         Store.open(storeDir).use { store ->
             val index = store.map<String, FileHash>("details")
-            val queue = Queue()
             val rootNode = RootNode(local)
-            queue.add(rootNode)
+            val queue = Queue(rootNode)
             val executor = Executors.newCachedThreadPool()
             repeat(4) {
                 executor.submit {
@@ -49,15 +48,19 @@ class SyncApp : CliApp("sync") {
         Logger.info("Sync finished")
     }
 
-    class Queue {
+    class Queue(
+        private val rootNode: RootNode
+    ) {
         private val stateLock = ReentrantLock()
         private val condition = stateLock.newCondition()
-        private var pending = 0
         private val queue = ArrayList<Node>()
+
+        init {
+            add(rootNode)
+        }
 
         fun add(node: Node) {
             stateLock.withLock {
-                pending++
                 queue.add(node)
                 condition.signalAll()
             }
@@ -66,7 +69,7 @@ class SyncApp : CliApp("sync") {
         fun take(): Node? {
             return stateLock.withLock {
                 while (queue.isEmpty()) {
-                    if (pending == 0) {
+                    if (rootNode.finished) {
                         return null
                     }
                     condition.await()
@@ -79,7 +82,6 @@ class SyncApp : CliApp("sync") {
             stateLock.withLock {
                 action()
                 node.visited()
-                pending--
                 condition.signalAll()
             }
         }
@@ -102,7 +104,7 @@ class SyncApp : CliApp("sync") {
         private var waitingForDirs = 0
         private val entries = mutableListOf<TreeEntry>()
 
-        private val finished: Boolean get() = visited && waitingForDirs == 0
+        val finished: Boolean get() = visited && waitingForDirs == 0
 
         fun dir(directory: Directory): Node {
             waitingForDirs++
