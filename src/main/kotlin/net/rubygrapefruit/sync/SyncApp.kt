@@ -19,26 +19,31 @@ class SyncApp : CliApp("sync") {
         Store.open(storeDir).use { store ->
             val index = store.map<String, FileHash>("details")
             val queue = Queue()
-            queue.add(Node(local))
+            val rootNode = RootNode(local)
+            queue.add(rootNode)
             val executor = Executors.newCachedThreadPool()
             repeat(4) {
                 executor.submit {
                     while (true) {
-                        val node = queue.take() ?: break
+                        val node = queue.take()
+                        if (node == null) {
+                            Logger.info("Worker finished")
+                            break
+                        }
                         Logger.info("Visit ${node.directory}")
                         for (entry in node.directory.listEntries()) {
                             when (entry.type) {
-                                ElementType.Directory -> queue.add(Node(entry.toDir()))
+                                ElementType.Directory -> queue.add(node.dir(entry.toDir()))
 
-                                else -> Logger.info("Ignore ${entry.path}")
+                                else -> continue
                             }
                         }
-                        queue.finished(node)
+                        queue.visited(node)
                     }
                 }
             }
 
-            queue.await()
+            queue.await(rootNode)
 
 //            val result = executor.submit<DirTree> {
 //                visitDir(local, executor)
@@ -89,24 +94,70 @@ class SyncApp : CliApp("sync") {
             }
         }
 
-        fun finished(node: Node) {
+        fun visited(node: Node) {
             stateLock.withLock {
+                node.visited()
                 pending--
                 condition.signalAll()
             }
         }
 
-        fun await() {
+        fun await(node: RootNode) {
             stateLock.withLock {
-                while (pending > 0) {
+                while (node.waiting) {
+                    Logger.info("Waiting for $node")
                     condition.await()
                 }
             }
         }
     }
 
-    class Node(val directory: Directory) {
+    sealed class Node(val directory: Directory) {
+        private var visited = false
+        private var waitingForDirs = 0
 
+        val waiting: Boolean get() = !visited || waitingForDirs > 0
+
+        val finished: Boolean get() = visited && waitingForDirs == 0
+
+        override fun toString(): String {
+            return "$directory visited: $visited, waitingFor: $waitingForDirs"
+        }
+
+        fun dir(directory: Directory): Node {
+            waitingForDirs++
+            return ChildNode(directory, this)
+        }
+
+        fun visited() {
+            require(!visited)
+            Logger.info("Visited $directory")
+            visited = true
+            if (finished) {
+                finished()
+            }
+        }
+
+        fun childFinished() {
+            require(visited && waitingForDirs > 0)
+            waitingForDirs--
+            if (finished) {
+                finished()
+            }
+        }
+
+        open fun finished() {
+            Logger.info("Finished $directory")
+        }
+    }
+
+    class RootNode(directory: Directory) : Node(directory)
+
+    class ChildNode(directory: Directory, private val parent: Node) : Node(directory) {
+        override fun finished() {
+            super.finished()
+            parent.childFinished()
+        }
     }
 }
 
