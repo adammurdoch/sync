@@ -6,6 +6,7 @@ import net.rubygrapefruit.file.ElementType
 import net.rubygrapefruit.file.RegularFile
 import net.rubygrapefruit.file.fileSystem
 import net.rubygrapefruit.store.Store
+import net.rubygrapefruit.store.StoredMap
 import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -18,12 +19,13 @@ class SyncApp : CliApp("sync") {
         val storeDir = fileSystem.userHomeDirectory.dir(".dir-sync")
         Store.open(storeDir).use { store ->
             val index = store.map<String, FileHash>("details")
+            val indexLock = ReentrantLock()
             val rootNode = RootNode(local)
             val queue = Queue(rootNode)
             val executor = Executors.newCachedThreadPool()
             repeat(4) {
                 executor.submit {
-                    worker(queue)
+                    worker(queue, index, indexLock)
                 }
             }
 
@@ -33,7 +35,7 @@ class SyncApp : CliApp("sync") {
         Logger.info("Sync finished")
     }
 
-    private fun worker(queue: Queue) {
+    private fun worker(queue: Queue, index: StoredMap<String, FileHash>, indexLock: ReentrantLock) {
         while (true) {
             val node = queue.take()
             if (node == null) {
@@ -41,6 +43,14 @@ class SyncApp : CliApp("sync") {
             }
             when (node) {
                 is RegularFileNode -> {
+                    val cached = indexLock.withLock {
+                        index.get(node.file.path.absolutePath)
+                    }
+                    if (cached == null) {
+                        indexLock.withLock {
+                            index.set(node.file.path.absolutePath, FileHash(ByteArray(0)))
+                        }
+                    }
                     queue.visiting(node) {}
                 }
 
