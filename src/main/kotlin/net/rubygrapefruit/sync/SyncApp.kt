@@ -22,23 +22,7 @@ class SyncApp : CliApp("sync") {
             val executor = Executors.newCachedThreadPool()
             repeat(4) {
                 executor.submit {
-                    while (true) {
-                        val node = queue.take()
-                        if (node == null) {
-                            break
-                        }
-                        val entries = node.directory.listEntries()
-                        queue.visiting(node) {
-                            for (entry in entries) {
-                                when (entry.type) {
-                                    ElementType.Directory -> queue.add(node.dir(entry.toDir()))
-                                    ElementType.RegularFile -> node.regularFile(entry.name)
-                                    ElementType.SymLink -> node.symLink(entry.name)
-                                    else -> throw UnsupportedOperationException("Unsupported type ${entry.type} for $entry")
-                                }
-                            }
-                        }
-                    }
+                    worker(queue)
                 }
             }
 
@@ -46,6 +30,26 @@ class SyncApp : CliApp("sync") {
             Logger.info("Found entries: ${tree.count}")
         }
         Logger.info("Sync finished")
+    }
+
+    private fun worker(queue: Queue) {
+        while (true) {
+            val node = queue.take()
+            if (node == null) {
+                return
+            }
+            val entries = node.directory.listEntries()
+            queue.visiting(node) {
+                for (entry in entries) {
+                    when (entry.type) {
+                        ElementType.Directory -> queue.add(node.dir(entry.toDir()))
+                        ElementType.RegularFile -> node.regularFile(entry.name)
+                        ElementType.SymLink -> node.symLink(entry.name)
+                        else -> throw UnsupportedOperationException("Unsupported type ${entry.type} for $entry")
+                    }
+                }
+            }
+        }
     }
 
     class Queue(
