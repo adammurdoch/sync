@@ -7,6 +7,8 @@ import net.rubygrapefruit.file.RegularFile
 import net.rubygrapefruit.file.fileSystem
 import net.rubygrapefruit.store.Store
 import net.rubygrapefruit.store.StoredMap
+import java.time.Instant
+import java.util.*
 import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -77,6 +79,7 @@ class SyncApp : CliApp("sync") {
         private val stateLock = ReentrantLock()
         private val condition = stateLock.newCondition()
         private val queue = ArrayList<Node>()
+        private var visited = 0L
 
         init {
             add(rootNode)
@@ -105,18 +108,25 @@ class SyncApp : CliApp("sync") {
             stateLock.withLock {
                 action()
                 node.visited()
+                visited++
                 condition.signalAll()
             }
         }
 
         fun await(node: RootNode): DirTree {
+            val updatePeriod = 2L
+            var nextUpdate = Instant.now().plusSeconds(updatePeriod)
             stateLock.withLock {
                 while (true) {
                     val tree = node.result
                     if (tree != null) {
                         return tree
                     }
-                    condition.await()
+                    condition.awaitUntil(Date.from(nextUpdate))
+                    if (Instant.now() > nextUpdate) {
+                        Logger.info("Seen $visited entries")
+                        nextUpdate = Instant.now().plusSeconds(updatePeriod)
+                    }
                 }
             }
         }
