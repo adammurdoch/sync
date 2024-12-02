@@ -5,7 +5,6 @@ import net.rubygrapefruit.file.Directory
 import net.rubygrapefruit.file.ElementType
 import net.rubygrapefruit.file.fileSystem
 import net.rubygrapefruit.store.Store
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -27,45 +26,27 @@ class SyncApp : CliApp("sync") {
                     while (true) {
                         val node = queue.take()
                         if (node == null) {
-                            Logger.info("Worker finished")
                             break
                         }
-                        Logger.info("Visit ${node.directory}")
-                        for (entry in node.directory.listEntries()) {
-                            when (entry.type) {
-                                ElementType.Directory -> queue.add(node.dir(entry.toDir()))
-
-                                else -> continue
+                        val entries = node.directory.listEntries()
+                        queue.visiting(node) {
+                            for (entry in entries) {
+                                when (entry.type) {
+                                    ElementType.Directory -> queue.add(node.dir(entry.toDir()))
+                                    ElementType.RegularFile -> node.regularFile(entry.name)
+                                    ElementType.SymLink -> node.symLink(entry.name)
+                                    else -> throw UnsupportedOperationException("Unsupported type ${entry.type} for $entry")
+                                }
                             }
                         }
-                        queue.visited(node)
                     }
                 }
             }
 
-            queue.await(rootNode)
-
-//            val result = executor.submit<DirTree> {
-//                visitDir(local, executor)
-//            }
-//            val tree = result.get()
-//            Logger.info("Found entries: ${tree.count}")
+            val tree = queue.await(rootNode)
+            Logger.info("Found entries: ${tree.count}")
         }
         Logger.info("Sync finished")
-    }
-
-    private fun visitDir(directory: Directory, executor: ExecutorService): DirTree {
-        val entries = directory.listEntries().map { entry ->
-            executor.submit<TreeEntry> {
-                when (entry.type) {
-                    ElementType.Directory -> visitDir(entry.toDir(), executor)
-                    ElementType.RegularFile -> RegularFileEntry(entry.name)
-                    ElementType.SymLink -> SymlinkEntry(entry.name)
-                    else -> throw UnsupportedOperationException("Unsupported type ${entry.type} for $entry")
-                }
-            }
-        }.map { it.get() }
-        return DirTree(directory, entries)
     }
 
     class Queue {
@@ -94,18 +75,22 @@ class SyncApp : CliApp("sync") {
             }
         }
 
-        fun visited(node: Node) {
+        fun visiting(node: Node, action: () -> Unit) {
             stateLock.withLock {
+                action()
                 node.visited()
                 pending--
                 condition.signalAll()
             }
         }
 
-        fun await(node: RootNode) {
+        fun await(node: RootNode): DirTree {
             stateLock.withLock {
-                while (node.waiting) {
-                    Logger.info("Waiting for $node")
+                while (true) {
+                    val tree = node.result
+                    if (tree != null) {
+                        return tree
+                    }
                     condition.await()
                 }
             }
@@ -115,48 +100,58 @@ class SyncApp : CliApp("sync") {
     sealed class Node(val directory: Directory) {
         private var visited = false
         private var waitingForDirs = 0
+        private val entries = mutableListOf<TreeEntry>()
 
-        val waiting: Boolean get() = !visited || waitingForDirs > 0
-
-        val finished: Boolean get() = visited && waitingForDirs == 0
-
-        override fun toString(): String {
-            return "$directory visited: $visited, waitingFor: $waitingForDirs"
-        }
+        private val finished: Boolean get() = visited && waitingForDirs == 0
 
         fun dir(directory: Directory): Node {
             waitingForDirs++
             return ChildNode(directory, this)
         }
 
+        fun regularFile(name: String) {
+            entries += RegularFileEntry(name)
+        }
+
+        fun symLink(name: String) {
+            entries += SymlinkEntry(name)
+        }
+
         fun visited() {
             require(!visited)
-            Logger.info("Visited $directory")
             visited = true
             if (finished) {
                 finished()
             }
         }
 
-        fun childFinished() {
+        fun childFinished(entry: DirTree) {
             require(visited && waitingForDirs > 0)
             waitingForDirs--
+            entries += entry
             if (finished) {
                 finished()
             }
         }
 
-        open fun finished() {
-            Logger.info("Finished $directory")
+        private fun finished() {
+            finished(DirTree(directory, entries.toList()))
+        }
+
+        abstract fun finished(tree: DirTree)
+    }
+
+    class RootNode(directory: Directory) : Node(directory) {
+        var result: DirTree? = null
+
+        override fun finished(tree: DirTree) {
+            result = tree
         }
     }
 
-    class RootNode(directory: Directory) : Node(directory)
-
     class ChildNode(directory: Directory, private val parent: Node) : Node(directory) {
-        override fun finished() {
-            super.finished()
-            parent.childFinished()
+        override fun finished(tree: DirTree) {
+            parent.childFinished(tree)
         }
     }
 }
