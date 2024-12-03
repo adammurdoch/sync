@@ -34,15 +34,13 @@ class SyncApp : CliApp("sync") {
             val tree = queue.await(rootNode)
             Logger.info("Found entries: ${tree.count}")
         }
+
         Logger.info("Sync finished")
     }
 
     private fun worker(queue: Queue, index: StoredMap<String, FileHash>, indexLock: ReentrantLock) {
         while (true) {
-            val node = queue.take()
-            if (node == null) {
-                return
-            }
+            val node = queue.take() ?: return
             when (node) {
                 is RegularFileNode -> {
                     val cached = indexLock.withLock {
