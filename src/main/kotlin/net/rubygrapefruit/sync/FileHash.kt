@@ -4,5 +4,9 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 class FileHash(
-    val checksum: ByteArray
-)
+    private val checksum: ByteArray
+) {
+    override fun toString(): String {
+        return checksum.joinToString("") { it.toUByte().toString(16).padStart(2, '0') }
+    }
+}

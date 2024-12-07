@@ -7,11 +7,13 @@ import net.rubygrapefruit.file.RegularFile
 import net.rubygrapefruit.file.fileSystem
 import net.rubygrapefruit.store.Store
 import net.rubygrapefruit.store.StoredMap
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.*
 import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+
 
 class SyncApp : CliApp("sync") {
     private val local by dir().parameter("local", help = "Local directory")
@@ -46,11 +48,26 @@ class SyncApp : CliApp("sync") {
                     val cached = indexLock.withLock {
                         index.get(node.file.path.absolutePath)
                     }
-                    val hash = FileHash(ByteArray(0))
-                    if (cached == null) {
+                    val hash = if (cached == null) {
+                        val digest = MessageDigest.getInstance("SHA-256")
+                        val hash = node.file.read { source ->
+                            val buffer = ByteArray(4096)
+                            while (true) {
+                                val nread = source.readAtMostTo(buffer)
+                                if (nread < 0) {
+                                    break
+                                }
+                                digest.update(buffer, 0, nread)
+                            }
+                            FileHash(digest.digest())
+                        }
+                        Logger.info("${node.file} Hash: $hash")
                         indexLock.withLock {
                             index.set(node.file.path.absolutePath, hash)
                         }
+                        hash
+                    } else {
+                        cached
                     }
                     queue.visiting(node) {
                         node.entry = RegularFileEntry(node.file.name, hash)
