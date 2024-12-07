@@ -17,7 +17,7 @@ class DirTree(val dir: Directory, val entries: List<TreeEntry>) : TreeEntry() {
         }
 }
 
-class RegularFileEntry(override val name: String) : TreeEntry() {
+class RegularFileEntry(override val name: String, val hash: FileHash) : TreeEntry() {
     override val count: Int
         get() = 1
 }

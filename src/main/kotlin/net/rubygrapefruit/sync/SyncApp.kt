@@ -46,12 +46,15 @@ class SyncApp : CliApp("sync") {
                     val cached = indexLock.withLock {
                         index.get(node.file.path.absolutePath)
                     }
+                    val hash = FileHash(ByteArray(0))
                     if (cached == null) {
                         indexLock.withLock {
-                            index.set(node.file.path.absolutePath, FileHash(ByteArray(0)))
+                            index.set(node.file.path.absolutePath, hash)
                         }
                     }
-                    queue.visiting(node) {}
+                    queue.visiting(node) {
+                        node.entry = RegularFileEntry(node.file.name, hash)
+                    }
                 }
 
                 is DirectoryNode -> {
@@ -134,9 +137,11 @@ class SyncApp : CliApp("sync") {
         abstract fun visited()
     }
 
-    class RegularFileNode(val file: RegularFile, val parent: DirectoryNode) : Node() {
+    class RegularFileNode(val file: RegularFile, private val parent: DirectoryNode) : Node() {
+        lateinit var entry: RegularFileEntry
+
         override fun visited() {
-            parent.childFinished(RegularFileEntry(file.name))
+            parent.childFinished(entry)
         }
     }
 
@@ -158,7 +163,7 @@ class SyncApp : CliApp("sync") {
         }
 
         fun symLink(name: String) {
-            entries += SymlinkEntry(name)
+            entries.add(SymlinkEntry(name))
         }
 
         override fun visited() {
