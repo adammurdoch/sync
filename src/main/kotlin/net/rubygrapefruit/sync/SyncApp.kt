@@ -1,10 +1,7 @@
 package net.rubygrapefruit.sync
 
 import net.rubygrapefruit.cli.app.CliApp
-import net.rubygrapefruit.file.Directory
-import net.rubygrapefruit.file.ElementType
-import net.rubygrapefruit.file.RegularFile
-import net.rubygrapefruit.file.fileSystem
+import net.rubygrapefruit.file.*
 import net.rubygrapefruit.store.Store
 import net.rubygrapefruit.store.StoredMap
 import java.security.MessageDigest
@@ -48,7 +45,8 @@ class SyncApp : CliApp("sync") {
                     val cached = indexLock.withLock {
                         index.get(node.file.path.absolutePath)
                     }
-                    val hash = if (cached == null) {
+                    val metadata = node.file.metadata().get() as RegularFileMetadata
+                    val hash = if (cached == null || cached.size != metadata.size || cached.lastModified != metadata.lastModified.nanos) {
                         val digest = MessageDigest.getInstance("SHA-256")
                         val hash = node.file.read { source ->
                             val buffer = ByteArray(4096)
@@ -59,7 +57,7 @@ class SyncApp : CliApp("sync") {
                                 }
                                 digest.update(buffer, 0, nread)
                             }
-                            FileHash(digest.digest())
+                            FileHash(metadata.size, metadata.lastModified.nanos, digest.digest())
                         }
                         Logger.info("${node.file} Hash: $hash")
                         indexLock.withLock {
